@@ -54,7 +54,7 @@ using namespace std::chrono_literals;
 
 namespace
 {
-    constexpr const char* kPluginVersion = "0.3.1";
+    constexpr const char* kPluginVersion = "0.3.2";
     constexpr const char* kPluginId = "chim_injury_framework";
     constexpr const char* kNotifyPrefix = "CHIM-injury: ";
     constexpr const char* kChimScript = "AIAgentFunctions";
@@ -66,6 +66,7 @@ namespace
     constexpr RE::FormID kCurrentFollowerFaction = 0x0005C84E;
     constexpr std::uint32_t kSerializationId = 'CHIJ';
     constexpr std::uint32_t kRecordWounds = 'WNDS';
+    constexpr std::uint32_t kRecordPainted = 'PNTD';
     constexpr std::uint32_t kRecordVersion = 1;
 
     // ------------------------------------------------------------------------------------
@@ -145,7 +146,8 @@ namespace
         char buffer[64]{};
         GetPrivateProfileStringA(section, key, "", buffer, sizeof(buffer), kIni);
         try {
-            return buffer[0] ? std::stof(buffer) : def;
+            const float value = buffer[0] ? std::stof(buffer) : def;
+            return std::isfinite(value) ? value : def;  // "nan" or "inf" would slip through std::clamp
         } catch (...) {
             return def;
         }
@@ -415,11 +417,93 @@ namespace
     // ------------------------------------------------------------------------------------
     // HTTP to the server plugin (settings and commands in, status, wounds and log tail out).
     // ------------------------------------------------------------------------------------
-    std::string JsonEscape(const std::string& in)
+    // Length of the valid UTF-8 sequence starting at in[i], or 0 if the bytes there are not one.
+    // (After a pull request by Francisco Estaba, #1.)
+    std::size_t Utf8SequenceLength(const std::string& in, std::size_t i)
     {
+        const auto b = [&](std::size_t k) { return static_cast<unsigned char>(in[k]); };
+        const unsigned char c = b(i);
+        std::size_t len = 0;
+        unsigned char lo = 0x80, hi = 0xBF;  // allowed range of the second byte
+        if (c >= 0xC2 && c <= 0xDF) {
+            len = 2;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            len = 3;
+            if (c == 0xE0) lo = 0xA0;  // overlong
+            if (c == 0xED) hi = 0x9F;  // surrogates
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            len = 4;
+            if (c == 0xF0) lo = 0x90;  // overlong
+            if (c == 0xF4) hi = 0x8F;  // above U+10FFFF
+        } else {
+            return 0;
+        }
+        if (i + len > in.size() || b(i + 1) < lo || b(i + 1) > hi) {
+            return 0;
+        }
+        for (std::size_t k = 2; k < len; ++k) {
+            if (b(i + k) < 0x80 || b(i + k) > 0xBF) {
+                return 0;
+            }
+        }
+        return len;
+    }
+
+    bool IsValidUtf8(const std::string& in)
+    {
+        for (std::size_t i = 0; i < in.size(); ++i) {
+            if (static_cast<unsigned char>(in[i]) >= 0x80) {
+                const auto len = Utf8SequenceLength(in, i);
+                if (len == 0) {
+                    return false;
+                }
+                i += len - 1;
+            }
+        }
+        return true;
+    }
+
+    // Skyrim's own strings (names from plugins and string tables) are Windows-1252, not UTF-8.
+    // The game and Papyrus keep the original bytes; only text sent to the server is converted.
+    std::string ToUtf8(const std::string& in)
+    {
+        if (IsValidUtf8(in)) {
+            return in;
+        }
+        const int wlen = MultiByteToWideChar(1252, 0, in.data(), static_cast<int>(in.size()), nullptr, 0);
+        if (wlen <= 0) {
+            return in;
+        }
+        std::wstring wide(static_cast<size_t>(wlen), L'\0');
+        MultiByteToWideChar(1252, 0, in.data(), static_cast<int>(in.size()), wide.data(), wlen);
+        const int len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wlen, nullptr, 0, nullptr, nullptr);
+        if (len <= 0) {
+            return in;
+        }
+        std::string out(static_cast<size_t>(len), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wide.data(), wlen, out.data(), len, nullptr, nullptr);
+        return out;
+    }
+
+    // Always returns valid UTF-8 JSON string content: Windows-1252 text is converted, anything
+    // still invalid becomes U+FFFD, so one odd name cannot make the server drop a whole report.
+    std::string JsonEscape(const std::string& raw)
+    {
+        const std::string in = ToUtf8(raw);
         std::string out;
         out.reserve(in.size() + 8);
-        for (unsigned char c : in) {
+        for (std::size_t i = 0; i < in.size(); ++i) {
+            const auto c = static_cast<unsigned char>(in[i]);
+            if (c >= 0x80) {
+                const std::size_t len = Utf8SequenceLength(in, i);
+                if (len == 0) {
+                    out += "\xEF\xBF\xBD";
+                } else {
+                    out.append(in, i, len);
+                    i += len - 1;
+                }
+                continue;
+            }
             switch (c) {
             case '"': out += "\\\""; break;
             case '\\': out += "\\\\"; break;
@@ -797,6 +881,17 @@ namespace
 // ========================================================================================
 namespace
 {
+    // A name inside a [ ... ] marker must not end the marker or its quotes.
+    std::string MarkerSafe(std::string s)
+    {
+        for (auto& c : s) {
+            if (c == '"') c = '\'';
+            if (c == ']') c = ')';
+            if (c == '[') c = '(';
+        }
+        return s;
+    }
+
     // "info_*" events are stored in CHIM's event log. The server plugin (prerequest.php) removes the
     // marker and makes the event visible to everyone nearby.
     void LogToChim(const std::string& actorName, const std::string& event, const std::string& sentence)
@@ -804,7 +899,7 @@ namespace
         if (!g_settings.logToChim) {
             return;
         }
-        const std::string text = std::format("[injury actor=\"{}\" event={}] {}", actorName, event, sentence);
+        const std::string text = std::format("[injury actor=\"{}\" event={}] {}", MarkerSafe(actorName), event, sentence);
         const bool dispatched = CallStatic(kChimScript, "logMessage",
             [actorName](const RE::BSScript::Variable& result) {
                 if (result.IsInt() && result.GetSInt() == 0) {
@@ -967,6 +1062,9 @@ namespace
     };
 
     std::unordered_map<RE::FormID, OverlayState> g_overlayState;
+    // Actors that may carry our (persisted) overlays, kept in the save: a wound that heals while the
+    // actor is away still gets its overlay removed when they show up again (issue #2).
+    std::set<RE::FormID> g_painted;
     std::atomic<int> g_overlaySlotsShort{0};
 
     struct SlotQuery
@@ -1064,6 +1162,11 @@ namespace
             CallStatic(kNio, "RemoveAllNodeNameOverrides", nullptr, ref, female, node);
             CallStatic(kNio, "AddNodeOverrideString", nullptr, ref, female, node, static_cast<std::int32_t>(9), static_cast<std::int32_t>(0), std::string(kDefaultOverlay), false);
             CallStatic(kNio, "AddNodeOverrideFloat", nullptr, ref, female, node, static_cast<std::int32_t>(8), static_cast<std::int32_t>(-1), 0.0f, false);
+        }
+        if (!assigned.empty()) {
+            g_painted.insert(query->id);
+        } else {
+            g_painted.erase(query->id);  // every slot of ours has just been cleared
         }
         state.applied = true;
         state.sig = Signature(wants) + (female ? "F" : "M");
@@ -1460,12 +1563,12 @@ namespace
             return;
         }
         auto names = std::make_shared<std::vector<std::string>>(std::move(unique));
-        std::string message = std::format("[chim_injury react={} npc=\"{}\" combat={}] {}", kind, names->front(), combat ? 1 : 0, details);
+        std::string message = std::format("[chim_injury react={} npc=\"{}\" combat={}] {}", kind, MarkerSafe(names->front()), combat ? 1 : 0, details);
         const std::string first = names->front();
         std::thread([names, message = std::move(message), kind, first]() mutable {
             std::string answer;
             const bool ok = HttpRequest(g_server.host, g_server.port, "GET",
-                std::format("{}/api/decide.php?kind={}&npc={}", g_server.basePath, kind, UrlEncode(first)), {}, &answer);
+                std::format("{}/api/decide.php?kind={}&npc={}", g_server.basePath, kind, UrlEncode(ToUtf8(first))), {}, &answer);
             answer = Trim(answer);
             RunOnGameThread([names, message = std::move(message), kind, ok, answer]() mutable {
                 if (ok && answer == "allow") {
@@ -2248,6 +2351,7 @@ namespace
         for (auto& [id, entry] : g_wounds) {
             ids.insert(id);
         }
+        ids.insert(g_painted.begin(), g_painted.end());
         for (auto id : ids) {
             if (force) {
                 g_overlayState[id].applied = false;
@@ -2483,7 +2587,10 @@ namespace
         };
         auto f = [&](const char* key, float& target) {
             try {
-                if (values.contains(key)) target = std::stof(values[key]);
+                if (values.contains(key)) {
+                    const float value = std::stof(values[key]);
+                    if (std::isfinite(value)) target = value;
+                }
             } catch (...) {
             }
         };
@@ -2636,12 +2743,12 @@ namespace
         g_stateDirty = false;
         return std::format(
             "{{\"plugin\":\"{}\",\"version\":\"{}\",\"game_version\":\"{}\",\"server_from\":\"{}\",\"game_loaded\":{},"
-            "\"racemenu_loaded\":{},\"racemenu_version\":\"{}\",\"overlay_slots\":{},\"overlay_player_only\":{},\"overlay_slots_short\":{},\"anim_plugin\":{},\"anim_actors\":{},\"reactions_queued\":{},"
+            "\"racemenu_loaded\":{},\"racemenu_version\":\"{}\",\"overlay_slots\":{},\"overlay_player_only\":{},\"overlay_slots_short\":{},\"anim_plugin\":{},\"anim_actors\":{},\"reactions_queued\":{},\"painted_actors\":{},"
             "\"enabled\":{},\"debug\":{},\"tracked\":{},\"wounds\":{},\"hits_seen\":{},\"wounds_made\":{},\"healed_magic\":{},"
             "\"healed_rest\":{},\"healed_time\":{},\"logged_to_chim\":{},\"overlays_applied\":{},\"failures\":{},\"cmd_done\":{},"
             "\"last_error\":\"{}\",\"state\":{},\"log_lines\":[{}]}}",
             kPluginId, kPluginVersion, JsonEscape(runtime), g_server.fromIni ? "CHIMInjury.ini" : "auto", g_gameReady,
-            g_overlay.skeeLoaded, JsonEscape(g_overlay.skeeVersion), g_overlay.numOverlays, g_overlay.playerOnly, g_overlaySlotsShort.load(), g_animReady, g_animApplied.size(), g_statReactions.load(),
+            g_overlay.skeeLoaded, JsonEscape(g_overlay.skeeVersion), g_overlay.numOverlays, g_overlay.playerOnly, g_overlaySlotsShort.load(), g_animReady, g_animApplied.size(), g_statReactions.load(), g_painted.size(),
             g_settings.enabled, g_settings.debug, g_tracked.size(), woundCount, g_statHits.load(), g_statWounds.load(),
             g_statHealedMagic.load(), g_statHealedRest.load(), g_statHealedTime.load(), g_statLogged.load(), g_statOverlayApplied.load(),
             g_statFailures.load(), g_lastCommand, JsonEscape(lastError), state, lines);
@@ -2693,10 +2800,20 @@ namespace
     private:
         void Loop()
         {
-            DiscoverServer();
+            try {
+                DiscoverServer();
+            } catch (...) {
+                logger::warn("Server discovery failed, using {}:{}", g_server.host, g_server.port);
+            }
             int idle = 0;
             while (_running) {
-                SyncOnce();
+                try {
+                    SyncOnce();
+                } catch (const std::exception& e) {
+                    logger::warn("Server sync failed: {}", e.what());
+                } catch (...) {
+                    logger::warn("Server sync failed");
+                }
                 // Every 15 s, or within 2 s after the wounds changed.
                 for (idle = 0; idle < 15 && _running; ++idle) {
                     std::unique_lock lock(_mutex);
@@ -2781,8 +2898,39 @@ namespace
         return len == 0 || intfc->ReadRecordData(out.data(), len) == len;
     }
 
+    void SavePainted(SKSE::SerializationInterface* intfc)
+    {
+        if (!intfc->OpenRecord(kRecordPainted, 1)) {
+            return;
+        }
+        const auto count = static_cast<std::uint32_t>(g_painted.size());
+        intfc->WriteRecordData(count);
+        for (auto id : g_painted) {
+            intfc->WriteRecordData(id);
+        }
+    }
+
+    void LoadPainted(SKSE::SerializationInterface* intfc)
+    {
+        std::uint32_t count = 0;
+        if (intfc->ReadRecordData(count) != sizeof(count)) {
+            return;
+        }
+        for (std::uint32_t i = 0; i < count && i < 100000; ++i) {
+            RE::FormID oldId = 0;
+            RE::FormID newId = 0;
+            if (intfc->ReadRecordData(oldId) != sizeof(oldId)) {
+                return;
+            }
+            if (intfc->ResolveFormID(oldId, newId)) {
+                g_painted.insert(newId);
+            }
+        }
+    }
+
     void OnSave(SKSE::SerializationInterface* intfc)
     {
+        SavePainted(intfc);
         if (!intfc->OpenRecord(kRecordWounds, kRecordVersion)) {
             logger::error("Could not write wounds to the save");
             return;
@@ -2822,6 +2970,7 @@ namespace
         ClearAnimKeywords();  // base forms keep runtime keywords until the game closes
         g_animPhase.clear();
         g_fightNotes.clear();
+        g_painted.clear();
         g_playerInCombat = false;
         ++g_fightGeneration;
         g_wounds.clear();
@@ -2841,6 +2990,10 @@ namespace
         std::uint32_t version = 0;
         std::uint32_t length = 0;
         while (intfc->GetNextRecordInfo(type, version, length)) {
+            if (type == kRecordPainted && version == 1) {
+                LoadPainted(intfc);
+                continue;
+            }
             if (type != kRecordWounds || version != kRecordVersion) {
                 logger::warn("Unknown save record {:08X} v{} skipped", type, version);
                 continue;

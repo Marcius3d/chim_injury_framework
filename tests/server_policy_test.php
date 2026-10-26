@@ -107,6 +107,11 @@ check('game log stored with level', count(array_filter($GLOBALS['db']->log, fn($
 $stored = chimInjuryGameState($settings, true);
 check('state stored', count($stored['actors']) === 3 && $stored['actors'][1]['wounds'][0]['severity'] === 3);
 check('stale state ignored in prompts', chimInjuryGameState($settings, true, time() + 3600)['actors'] === []);
+// A name from a non-UTF-8 string table (here cp1252 "é") must not sink the whole report (#1, test by Francisco Estaba).
+$latin1 = str_replace('Bandit Chief', "Bandit Chief Andr\xE9", $body);
+check('non-UTF-8 name accepted', chimInjuryHandleStatus($latin1) === null);
+check('non-UTF-8 name kept readable', str_contains((string)chimInjuryGetSettings()['game_state'], "Bandit Chief Andr\u{FFFD}"));
+chimInjuryHandleStatus($body);
 
 // --- prompt text ----------------------------------------------------------------------------
 check('wound text', chimInjuryWoundText($stored['actors'][1]['wounds'][0]) === 'deep gash <b> on the left arm (untreated, bleeding)');
@@ -170,6 +175,15 @@ check('heal limit 25 out of combat', chimInjuryWordLimit($ws, 'heal', false) ===
 check('heal in combat uses the smaller combat limit', chimInjuryWordLimit($ws, 'heal', true) === 15);
 $ws['react_heal_words'] = '0'; $ws['react_combat_words'] = '0';
 check('0 = no limit', chimInjuryWordLimit($ws, 'heal', true) === 0 && !str_contains(chimInjuryBuildReaction($ws, 'heal', 'Lydia', 'x', true), 'words'));
+
+// --- page protection and old commands (#3, #4) ---------------------------------------------
+check('same-origin post allowed', chimInjuryIsSameOriginPost(['HTTP_SEC_FETCH_SITE' => 'same-origin', 'HTTP_ORIGIN' => 'http://127.0.0.1:8081', 'HTTP_HOST' => '127.0.0.1:8081']));
+check('old browser without headers allowed', chimInjuryIsSameOriginPost(['HTTP_HOST' => 'localhost:8081']));
+check('cross-site post refused', !chimInjuryIsSameOriginPost(['HTTP_SEC_FETCH_SITE' => 'cross-site', 'HTTP_HOST' => '127.0.0.1:8081']));
+check('foreign origin refused', !chimInjuryIsSameOriginPost(['HTTP_ORIGIN' => 'https://evil.example', 'HTTP_HOST' => '127.0.0.1:8081']));
+$GLOBALS['db']->rows['commands'] = json_encode([['id' => 7, 'action' => 'heal_all', 'actor' => '', 'key' => '', 'ts' => time() - 3600], ['id' => 8, 'action' => 'heal', 'actor' => '14', 'key' => '', 'ts' => time()]]);
+$config = chimInjuryConfigText(chimInjuryGetSettings());
+check('old command not sent to the game', !str_contains($config, 'cmd=7|') && str_contains($config, 'cmd=8|heal|14|'));
 
 // --- packaging rule -------------------------------------------------------------------------
 $hookNames = ['globals.php', 'preprocessing.php', 'prerequest.php', 'context_pre.php', 'context.php', 'prompts.php', 'postrequest.php', 'functions.php'];

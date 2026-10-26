@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2
+
+Fixes from a code read-through by Francisco Estaba ([#1](https://github.com/Marcius3d/chim_injury_framework/pull/1), [#2](https://github.com/Marcius3d/chim_injury_framework/issues/2), [#3](https://github.com/Marcius3d/chim_injury_framework/issues/3), [#4](https://github.com/Marcius3d/chim_injury_framework/issues/4)). Thank you!
+
+- Names with accented letters (Skyrim stores them as Windows-1252) no longer make the server drop the whole status report: the game plugin converts them to UTF-8 ("André" stays "André"), and the server replaces anything still invalid instead of refusing the report.
+- A follower whose wound healed while they were away keeps no wound overlay: the save now remembers who carries our overlays, and they are cleaned up when that person shows up again.
+- The plugin page only accepts changes made on the page itself, so another website cannot change settings or prompt texts through your browser.
+- Page commands older than 10 minutes are no longer sent to the game (they could otherwise hit a later save).
+- "nan" or "inf" in `CHIMInjury.ini` is ignored instead of breaking the damage thresholds.
+- A failing server sync can no longer stop the background connection.
+- Quotes or brackets in a name no longer break the event marker.
+- `LICENSE` now says that the textures are not under the MIT licence; release files use LF line endings.
+
 ## 0.3.1
 
 - Spoken reactions (the wounded follower speaks, not just whoever stands nearest):

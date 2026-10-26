@@ -10,12 +10,36 @@ if (defined('CHIM_INJURY_VERSION')) {
     return;
 }
 
-define('CHIM_INJURY_VERSION', '0.3.1');
+define('CHIM_INJURY_VERSION', '0.3.2');
 define('CHIM_INJURY_PLUGIN', 'chim_injury_framework');
 define('CHIM_INJURY_TABLE', 'plugins.chim_injury_settings');
 define('CHIM_INJURY_LOG_TABLE', 'plugins.chim_injury_log');
 define('CHIM_INJURY_LOG_KEEP', 2000);
-define('CHIM_INJURY_STATE_MAX_AGE', 600);  // seconds: older wound reports are not used in prompts
+define('CHIM_INJURY_STATE_MAX_AGE', 600);
+define('CHIM_INJURY_COMMAND_MAX_AGE', 600);  // seconds a page command waits for the game
+
+/**
+ * Plugin page POSTs must come from the page itself (#3): browsers send Sec-Fetch-Site and Origin,
+ * so another website cannot change settings or prompt texts through the user's browser.
+ */
+function chimInjuryIsSameOriginPost(array $server): bool
+{
+    $site = strtolower((string)($server['HTTP_SEC_FETCH_SITE'] ?? ''));
+    if ($site !== '' && $site !== 'same-origin' && $site !== 'none') {
+        return false;
+    }
+    $origin = (string)($server['HTTP_ORIGIN'] ?? '');
+    if ($origin !== '' && $origin !== 'null') {
+        $host = strtolower((string)parse_url($origin, PHP_URL_HOST));
+        $port = parse_url($origin, PHP_URL_PORT);
+        $originHost = $host . ($port ? ':' . $port : '');
+        $requestHost = strtolower((string)($server['HTTP_HOST'] ?? ''));
+        if ($requestHost !== '' && $originHost !== $requestHost) {
+            return false;
+        }
+    }
+    return true;
+}  // seconds: older wound reports are not used in prompts
 
 /** Marker CHIMInjury.dll puts in front of each info_injury event: [injury actor="Name" event=new] */
 define('CHIM_INJURY_EVENT_MARKER_REGEX', '/\[injury\b([^\]]*)\]\s*/i');
@@ -333,6 +357,9 @@ function chimInjuryConfigText(array $settings): string
         $lines[] = "{$key}={$value}";
     }
     foreach (chimInjuryCommands($settings) as $c) {
+        if (time() - (int)($c['ts'] ?? 0) > CHIM_INJURY_COMMAND_MAX_AGE) {
+            continue;  // too old: the game was not running; do not apply it to some later save (#4)
+        }
         $lines[] = sprintf('cmd=%d|%s|%s|%s', (int)($c['id'] ?? 0), (string)($c['action'] ?? ''), (string)($c['actor'] ?? ''), (string)($c['key'] ?? ''));
     }
     return implode("\n", $lines) . "\n";
@@ -345,7 +372,8 @@ function chimInjuryHandleStatus(string $body): ?string
         return 'too_large';
     }
     try {
-        $data = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
+        // Game strings are not always UTF-8; one odd name must not drop the whole report (#1).
+        $data = json_decode($body, true, 32, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
     } catch (Throwable $e) {
         return 'invalid_json';
     }

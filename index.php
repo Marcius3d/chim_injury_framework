@@ -93,7 +93,11 @@ $dbReady = chimInjuryDbReady();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string)($_POST['action'] ?? 'save');
-    if (!$dbReady) {
+    if (!chimInjuryIsSameOriginPost($_SERVER)) {
+        http_response_code(403);
+        $error = 'Refused: this change did not come from the plugin page itself.';
+        chimInjuryLog('warn', 'Refused a settings change from another website (' . ($_SERVER['HTTP_ORIGIN'] ?? $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '?') . ')');
+    } elseif (!$dbReady) {
         $error = 'The plugin tables are missing. Reinstall the plugin package so its migrations run.';
     } elseif (in_array($action, chimInjuryCommandActions(), true)) {
         if (chimInjuryQueueCommand($action, (string)($_POST['actor'] ?? ''), (string)($_POST['key'] ?? ''))) {

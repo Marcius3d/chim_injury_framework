@@ -1,3 +1,6 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
 *.dds binary
 *.jpg binary
-*.cmd text eol=crlf
+*.png binary
+*.esp binary
