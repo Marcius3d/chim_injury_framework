@@ -15,6 +15,8 @@ Without --dll only the server files are built (useful for testing the server sid
 from __future__ import annotations
 
 import argparse
+import os
+import time
 import hashlib
 import io
 import json
@@ -27,6 +29,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 PLUGIN_NAME = "chim_injury_framework"
+# File times inside the archives. CHIM installs the package with the NEWEST file time, so every release
+# must be newer than the last one. CI sets SOURCE_DATE_EPOCH to the release commit time (reproducible);
+# local builds fall back to now.
+BUILD_TIME = int(os.environ.get("SOURCE_DATE_EPOCH") or time.time())
 TEXTURES = ROOT / "Textures"  # optional: actors/character/CHIMInjury/{Female,Male}/*.dds
 
 # Files that make up the server extension (installed into HerikaServer/ext/chim_injury_framework/).
@@ -82,7 +88,7 @@ def zip_bytes(entries: list[tuple[str, bytes]]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, data in entries:
-            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info = zipfile.ZipInfo(name, date_time=time.gmtime(BUILD_TIME)[:6])
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
@@ -106,7 +112,7 @@ def build_server_tar(prefix: str = f"{PLUGIN_NAME}/") -> bytes:
             info = tarfile.TarInfo(f"{prefix}{name}")
             info.size = len(data)
             info.mode = 0o644
-            info.mtime = 1767225600
+            info.mtime = BUILD_TIME
             archive.addfile(info, io.BytesIO(data))
     return buffer.getvalue()
 

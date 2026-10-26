@@ -8,7 +8,7 @@ CHIM Injury Framework is an add-on for [CHIM](https://www.nexusmods.com/skyrimsp
 
 > "Hold still. That cut on your arm is still bleeding, and I'm not carrying you back to Whiterun."
 
-> **Status: 0.3.2, test version.** Works in game on Nolvus (Skyrim SE 1.5.97) with RaceMenu; testing continues. Please report results (see [Feedback](#feedback)).
+> **Status: 0.3.3, test version.** Works in game on Nolvus (Skyrim SE 1.5.97) with RaceMenu; testing continues. Please report results (see [Feedback](#feedback)).
 
 ## ⬇ Download
 
@@ -134,8 +134,13 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
 ```
 
 - **`CHIMInjury.dll`** is an SKSE plugin built with CommonLibSSE-NG. It talks to CHIM only through `AIAgentFunctions`, the API CHIM's own scripts use, and to RaceMenu only through the public `NiOverride` Papyrus functions. It works without the server (settings from the INI), and without RaceMenu (no visuals).
+<<<<<<< HEAD
 - **`ext/chim_injury_framework/`** is a HerikaServer plugin with two hooks (`prerequest.php` for `info_injury` events, `context_pre.php` for the prompt), a settings page, two API endpoints (`config`, `status`) and two tables, `plugins.chim_injury_settings` and `plugins.chim_injury_log`. Prompt text uses CHIM's `chimRegisterPromptInjection` (`character_bottom` and `prompt_bottom`).
 - Nothing changes in combat: no slowdown, no limping, no extra animations.
+=======
+- **`ext/chim_injury_framework/`** is a HerikaServer plugin with two hooks (`prerequest.php` for `info_injury` events, `context_pre.php` for the prompt), a settings page, three API endpoints (`config`, `status`, `decide` for spoken reactions) and two tables, `plugins.chim_injury_settings` and `plugins.chim_injury_log`. Prompt text uses CHIM's `chimRegisterPromptInjection` (`character_bottom` and `prompt_bottom`).
+- No gameplay penalties: wounds do not slow you down or lower your stats. Limping and holding a wound come only from the optional Wound Animation Pack, through state keywords (`CHIMInjury_Animations.esp`, see `tools/make_anim_plugin.py`).
+>>>>>>> 7c9b471 (CHIM Injury Framework 0.3.3)
 
 ## Feedback
 
@@ -145,5 +150,6 @@ Please open an [issue](https://github.com/Marcius3d/chim_injury_framework/issues
 
 - Code: MIT licence (see `LICENSE`), by Marcius3d. And Santa's little helper Claude.
 - Wound textures: **[Wounds Overlays For RaceMenu](https://www.nexusmods.com/skyrimspecialedition/mods/38547)** by **JaySerpa**, used and modified with the author's permission; wound photo from the [bmastock stock image](https://www.deviantart.com/bmastock/art/Wound-01-458522921). The male versions were converted from them to the male UV. The textures are **not** under the MIT licence: do not reuse them elsewhere, sell them or use them for Donation Points.
+- Wound Animation Pack: animations by **samuelga24**, **Funnybizness** and **Felisky384**; original mod **[Wounds](https://www.nexusmods.com/skyrimspecialedition/mods/17581)** by **IronDusk33**.
 - Inspired by [Injury Engine](https://github.com/GoodProvider/Injury_Engine) by GoodProvider (SkyrimNet, MIT): the idea of wound type, body region and severity from the hit. No code or assets are taken from it.
 - [CHIM](https://www.nexusmods.com/skyrimspecialedition/mods/126330) by Dwemer Dynamics, [RaceMenu](https://www.nexusmods.com/skyrimspecialedition/mods/19080) by expired6978, CommonLibSSE-NG.

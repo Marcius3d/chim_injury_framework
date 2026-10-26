@@ -54,7 +54,7 @@ using namespace std::chrono_literals;
 
 namespace
 {
-    constexpr const char* kPluginVersion = "0.3.2";
+    constexpr const char* kPluginVersion = "0.3.3";
     constexpr const char* kPluginId = "chim_injury_framework";
     constexpr const char* kNotifyPrefix = "CHIM-injury: ";
     constexpr const char* kChimScript = "AIAgentFunctions";

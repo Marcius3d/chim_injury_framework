@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+
+- Release archives now carry the release time instead of a fixed date. CHIM installs the server package with the newest file time, so a newer release now always wins over an older one left in place.
+- README: credits for the Wound Animation Pack, the third API endpoint (`decide`), the game log path, and the "How it works" note about animations.
+
 ## 0.3.2
 
 Fixes from a code read-through by Francisco Estaba ([#1](https://github.com/Marcius3d/chim_injury_framework/pull/1), [#2](https://github.com/Marcius3d/chim_injury_framework/issues/2), [#3](https://github.com/Marcius3d/chim_injury_framework/issues/3), [#4](https://github.com/Marcius3d/chim_injury_framework/issues/4)). Thank you!
