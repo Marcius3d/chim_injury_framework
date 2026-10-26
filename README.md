@@ -65,7 +65,7 @@ Severity: light below 12% of maximum health in one hit, medium below 25%, severe
 | Optional | What for |
 |---|---|
 | [RaceMenu](https://www.nexusmods.com/skyrimspecialedition/mods/19080) | Wounds drawn on the body. Without it everything else works. |
-| A wound animation pack made for CHIM Injury Framework | Limping, holding a wound, splinted arms. None is public yet; see [For animation pack authors](#for-animation-pack-authors). |
+| [Wound Animation Pack](https://drive.google.com/file/d/1pY165cF8GvWWhjfE4lBqBPKaUkR7STze/view?usp=sharing) | Limping, holding a wound, splinted arms. |
 | [Animation Queue Fix](https://www.nexusmods.com/skyrimspecialedition/mods/82395) (Ersh) | Recommended with an animation pack: prevents T-poses when many animations load at once. Nolvus already includes it. |
 
 No NFF, no other wound or gore mod, no ESP/ESL: CHIM Injury Framework takes no plugin slot. Followers are found automatically (`IsPlayerTeammate` or the vanilla follower faction). Summons and thralls are ignored.
@@ -109,14 +109,14 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
 
 ### Logs
 
-- Game: `Documents\My Games\Skyrim Special Edition\SKSE\chim-injury.log`. Recent lines are also sent to the server and shown on the plugin page.
+- Game: `Documents\\My Games\\Skyrim Special Edition\\SKSE\\chim-injury.log`. Recent lines are also sent to the server and shown on the plugin page.
 - Server: the Diagnostics section of the plugin page (last 2000 entries).
 
 ## How it works
 
 ```text
  Skyrim                                          DwemerDistro / HerikaServer
- ────────────────────────────────────────────    ─────────────────────────────────────────
+ ──────────────────────────────────────    ───────────────────────────────────────
  TESHitEvent on the player or a follower
    └─ health before and 0.35 s after the hit
       wound? type, region, severity
@@ -128,7 +128,7 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
  (TESMagicEffectApplyEvent), sleep (TESSleep*)
    └─ heal / treat
  every 15 s and after each change ── status + wounds ─▶ api/status.php
-                                  ◀── settings + page commands ── api/config.php
+                                  ◄── settings + page commands ── api/config.php
                                                  context_pre.php: wounds added to the prompt
                                                    of the NPC who speaks
 ```
@@ -136,21 +136,6 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
 - **`CHIMInjury.dll`** is an SKSE plugin built with CommonLibSSE-NG. It talks to CHIM only through `AIAgentFunctions`, the API CHIM's own scripts use, and to RaceMenu only through the public `NiOverride` Papyrus functions. It works without the server (settings from the INI), and without RaceMenu (no visuals).
 - **`ext/chim_injury_framework/`** is a HerikaServer plugin with two hooks (`prerequest.php` for `info_injury` events, `context_pre.php` for the prompt), a settings page, two API endpoints (`config`, `status`) and two tables, `plugins.chim_injury_settings` and `plugins.chim_injury_log`. Prompt text uses CHIM's `chimRegisterPromptInjection` (`character_bottom` and `prompt_bottom`).
 - Nothing changes in combat: no slowdown, no limping, no extra animations.
-
-## For animation pack authors
-
-CHIM Injury Framework does not ship animations, but it tells OAR/DAR what state a wounded person is in. Ship `CHIMInjury_Animations.esp` with your pack (make it with `python tools/make_anim_plugin.py`, ESL-flagged, keywords only) and use conditions like `HasKeyword("CHIMInjury_Animations.esp"|0x000808)`. The DLL adds the keywords to the wounded person's base form and removes them when the wounds heal (player and followers, from the severity set on the plugin page). By default the keywords come and go in episodes (on 5–10 s, off 20–25 s), so the animations play now and then.
-
-| Form ID | Keyword | Set when |
-|---|---|---|
-| 0x800 | `CHIMInjury_Anim_Concussion` | head: medium blunt wound, or severe untreated cut |
-| 0x801 / 0x802 | `..._SkullBroken` / `..._SkullSevere` | head: severe blunt wound / and not yet treated |
-| 0x803 / 0x804 | `..._TorsoCut` / `..._TorsoCutTreated` | chest or back: open cut, stab, bite or burn / treated severe one |
-| 0x805 / 0x806 / 0x807 | `..._RibsSoft` / `..._RibsMiddle` / `..._RibsSevere` | chest or back blunt: medium / severe treated / severe untreated |
-| 0x808–0x80B | `..._ArmLCut`, `..._ArmLCutTreated`, `..._ArmLBroken`, `..._ArmLSplinted` | left arm: open cut / treated severe cut / severe blunt / treated severe blunt |
-| 0x80C–0x80F | same for `ArmR` | right arm |
-| 0x810–0x813 | same for `LegL` | left leg |
-| 0x814–0x817 | same for `LegR` | right leg |
 
 ## Feedback
 
