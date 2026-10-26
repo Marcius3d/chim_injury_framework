@@ -8,7 +8,7 @@ CHIM Injury Framework is an add-on for [CHIM](https://www.nexusmods.com/skyrimsp
 
 > "Hold still. That cut on your arm is still bleeding, and I'm not carrying you back to Whiterun."
 
-> **Status: 0.3.0, test version.** Works in game on Nolvus (Skyrim SE 1.5.97) with RaceMenu; testing continues. Please report results (see [Feedback](#feedback)).
+> **Status: 0.3.1, test version.** Works in game on Nolvus (Skyrim SE 1.5.97) with RaceMenu; testing continues. Please report results (see [Feedback](#feedback)).
 
 ## ⬇ Download
 
@@ -27,6 +27,7 @@ This link always points to the newest release. Older versions are on the [Releas
 | When someone speaks | A wounded follower knows their own wounds, and NPCs see the wounds of the player and followers around them. This is added to the prompt only while someone is wounded. |
 | On the body | With RaceMenu installed, cuts and bruises appear on the chest, back, arms and legs. Burns, frostbite and shock burns are tinted bruises. |
 | Healing | See below. |
+| Spoken reactions | A follower badly hurt in combat cries out right away (one short line). After the fight the most hurt follower talks about the injuries. A healed follower thanks the healer or says it still hurts, and a follower who heals you comments on it. Chance and cooldown keep this occasional. |
 
 ### Wound types
 

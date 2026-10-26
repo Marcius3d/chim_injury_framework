@@ -54,7 +54,7 @@ using namespace std::chrono_literals;
 
 namespace
 {
-    constexpr const char* kPluginVersion = "0.3.0";
+    constexpr const char* kPluginVersion = "0.3.1";
     constexpr const char* kPluginId = "chim_injury_framework";
     constexpr const char* kNotifyPrefix = "CHIM-injury: ";
     constexpr const char* kChimScript = "AIAgentFunctions";
@@ -83,6 +83,7 @@ namespace
         bool notifications{true};
         int notifyMinSeverity{2};
         bool logToChim{true};
+        bool reactions{true};      // spoken reactions (policy and texts on the server)
         int logMinSeverity{2};
         float minDamagePct{5.0f};
         float mediumDamagePct{12.0f};
@@ -185,6 +186,7 @@ namespace
         s.debug = ReadBool("General", "bDebug", s.debug);
         s.notifications = ReadBool("General", "bNotifications", s.notifications);
         s.logToChim = ReadBool("General", "bLogToChim", s.logToChim);
+        s.reactions = ReadBool("General", "bReactions", s.reactions);
         s.logLevel = ReadInt("General", "iLogLevel", s.logLevel);
         s.trackPlayer = ReadBool("Tracking", "bTrackPlayer", s.trackPlayer);
         s.trackFollowers = ReadBool("Tracking", "bTrackFollowers", s.trackFollowers);
@@ -1349,6 +1351,260 @@ namespace
 }
 
 // ========================================================================================
+// Spoken reactions: a follower cries out at a severe wound in combat, talks about the injuries
+// after the fight, or reacts to being healed. The server decides (chance, cooldown) through
+// api/decide.php and rewrites the [chim_injury ...] request into the configured instruction.
+// ========================================================================================
+namespace
+{
+    std::atomic<int> g_statReactions{0};
+    constexpr float kSpeakRangeUnits = 3000.0f;  // ~43 m
+
+    std::string UrlEncode(const std::string& in)
+    {
+        std::string out;
+        for (unsigned char c : in) {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                out += static_cast<char>(c);
+            } else {
+                out += std::format("%{:02X}", c);
+            }
+        }
+        return out;
+    }
+
+    float DistanceToPlayer(RE::Actor* actor)
+    {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        return player && actor ? player->GetPosition().GetDistance(actor->GetPosition()) : 1e9f;
+    }
+
+    bool CanSpeak(RE::Actor* actor)
+    {
+        return actor && !actor->IsPlayerRef() && IsFollower(actor) && actor->Is3DLoaded() && DistanceToPlayer(actor) <= kSpeakRangeUnits;
+    }
+
+    // Followers who could speak, nearest first.
+    std::vector<std::string> NearbySpeakers(RE::FormID exclude)
+    {
+        std::vector<std::pair<float, RE::Actor*>> found;
+        if (auto lists = RE::ProcessLists::GetSingleton()) {
+            for (auto& handle : lists->highActorHandles) {
+                auto actor = handle.get();
+                if (actor && actor->GetFormID() != exclude && CanSpeak(actor.get())) {
+                    found.emplace_back(DistanceToPlayer(actor.get()), actor.get());
+                }
+            }
+        }
+        std::sort(found.begin(), found.end(), [](auto& a, auto& b) { return a.first < b.first; });
+        std::vector<std::string> names;
+        for (auto& [distance, actor] : found) {
+            names.push_back(ActorName(actor));
+        }
+        return names;
+    }
+
+    std::string WhoText(RE::Actor* actor)
+    {
+        const auto name = ActorName(actor);
+        return actor && actor->IsPlayerRef() ? name + " (the player)" : name;
+    }
+
+    void TryReact(std::shared_ptr<std::vector<std::string>> names, size_t index, std::string message, std::string kind)
+    {
+        if (index >= names->size()) {
+            logger::info("Reaction ({}): no follower could speak", kind);
+            return;
+        }
+        const std::string name = (*names)[index];
+        const bool dispatched = CallStatic(
+            kChimScript, "requestMessageForEligibleActor",
+            [names, index, message, name, kind](const RE::BSScript::Variable& result) {
+                const int code = result.IsInt() ? result.GetSInt() : -99;
+                if (code == 1) {
+                    ++g_statReactions;
+                    logger::info("Reaction ({}) queued by CHIM for {}", kind, name);
+                    Notify(std::format("reaction ({}) sent to {}", kind, name));
+                    return;
+                }
+                logger::info("CHIM did not queue the reaction for {} (code {}), trying the next follower", name, code);
+                RunOnGameThread([names, index, message, kind]() { TryReact(names, index + 1, message, kind); });
+            },
+            std::string(message), std::string("instruction"), std::string(name));
+        if (!dispatched) {
+            SetLastError("CHIM not reachable (requestMessageForEligibleActor)");
+        }
+    }
+
+    // kind: combat | after_fight | heal. speakers: preferred speaker first.
+    void RequestReaction(const std::string& kind, std::vector<std::string> speakers, const std::string& details, bool combat)
+    {
+        if (!g_settings.enabled || !g_settings.reactions || !g_gameReady) {
+            return;
+        }
+        std::vector<std::string> unique;
+        for (auto& n : speakers) {
+            if (!n.empty() && std::find(unique.begin(), unique.end(), n) == unique.end()) {
+                unique.push_back(n);
+            }
+        }
+        if (unique.size() > 3) {
+            unique.resize(3);
+        }
+        if (unique.empty()) {
+            logger::debug("Reaction ({}): nobody nearby to speak", kind);
+            return;
+        }
+        if (!g_serverReachable.load()) {
+            logger::info("Reaction ({}) skipped: server plugin not reachable", kind);
+            return;
+        }
+        auto names = std::make_shared<std::vector<std::string>>(std::move(unique));
+        std::string message = std::format("[chim_injury react={} npc=\"{}\" combat={}] {}", kind, names->front(), combat ? 1 : 0, details);
+        const std::string first = names->front();
+        std::thread([names, message = std::move(message), kind, first]() mutable {
+            std::string answer;
+            const bool ok = HttpRequest(g_server.host, g_server.port, "GET",
+                std::format("{}/api/decide.php?kind={}&npc={}", g_server.basePath, kind, UrlEncode(first)), {}, &answer);
+            answer = Trim(answer);
+            RunOnGameThread([names, message = std::move(message), kind, ok, answer]() mutable {
+                if (ok && answer == "allow") {
+                    TryReact(names, 0, std::move(message), kind);
+                } else {
+                    const auto bar = answer.find('|');
+                    const auto reason = !ok ? std::string("server not reachable") : bar == std::string::npos ? answer : answer.substr(bar + 1);
+                    logger::info("Reaction ({}) skipped: {}", kind, reason);
+                    Notify(std::format("reaction ({}) skipped: {}", kind, reason));
+                }
+            });
+        }).detach();
+    }
+
+    // --- injuries of the current fight ----------------------------------------------------
+    struct FightNote
+    {
+        RE::FormID id{0};
+        std::string who;
+        bool follower{false};
+        int severity{0};
+        std::string text;
+    };
+    std::vector<FightNote> g_fightNotes;
+    bool g_playerInCombat{false};
+    std::uint64_t g_fightGeneration{0};
+
+    void NoteFightWound(RE::Actor* actor, const Wound& w, const std::string& source)
+    {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !player->IsInCombat() || w.severity < 2) {
+            return;
+        }
+        const auto text = std::format("{} on the {}", WoundLabel(w), RegionLabel(w.region));
+        auto it = std::find_if(g_fightNotes.begin(), g_fightNotes.end(), [&](auto& n) { return n.id == actor->GetFormID(); });
+        if (it == g_fightNotes.end()) {
+            g_fightNotes.push_back({ actor->GetFormID(), WhoText(actor), !actor->IsPlayerRef(), w.severity, text });
+        } else if (w.severity >= it->severity) {
+            it->severity = w.severity;
+            it->text = text + (it->text.empty() || it->text == text ? "" : ", besides " + it->text);
+        }
+        if (w.severity >= 3) {
+            // Badly hurt right now: the wounded follower cries out, or a follower near the player does.
+            std::vector<std::string> speakers;
+            if (CanSpeak(actor)) {
+                speakers.push_back(ActorName(actor));
+            }
+            for (auto& n : NearbySpeakers(actor->GetFormID())) {
+                speakers.push_back(n);
+            }
+            RequestReaction("combat", speakers, std::format("{} was badly hurt: {}{}.", WhoText(actor), text, source), true);
+        }
+    }
+
+    void FinishFightReaction(std::uint64_t generation)
+    {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (generation != g_fightGeneration || !player || player->IsInCombat()) {
+            return;
+        }
+        auto notes = std::move(g_fightNotes);
+        g_fightNotes.clear();
+        if (notes.empty()) {
+            return;
+        }
+        std::stable_sort(notes.begin(), notes.end(), [](auto& a, auto& b) { return a.severity > b.severity; });
+        std::vector<std::string> speakers;
+        for (auto& n : notes) {
+            if (n.follower && CanSpeak(LookupActor(n.id))) {
+                speakers.push_back(ActorName(LookupActor(n.id)));
+            }
+        }
+        for (auto& n : NearbySpeakers(0)) {
+            speakers.push_back(n);
+        }
+        std::string details;
+        for (size_t i = 0; i < notes.size() && i < 3; ++i) {
+            details += (i == 0 ? "" : "; ") + std::format("{}: {}", notes[i].who, notes[i].text);
+        }
+        RequestReaction("after_fight", speakers, details + ".", false);
+    }
+
+    // Called every 2 s: notices when the player's fight ends and schedules the after-fight reaction.
+    void WatchFight()
+    {
+        auto player = RE::PlayerCharacter::GetSingleton();
+        if (!player) {
+            return;
+        }
+        const bool inCombat = player->IsInCombat();
+        if (inCombat && !g_playerInCombat) {
+            g_playerInCombat = true;
+            ++g_fightGeneration;  // a pending after-fight reaction becomes stale
+        } else if (!inCombat && g_playerInCombat) {
+            g_playerInCombat = false;
+            const auto generation = ++g_fightGeneration;
+            if (!g_fightNotes.empty()) {
+                std::uniform_int_distribution<int> delay(5000, 12000);
+                Scheduler::Get().After(std::chrono::milliseconds(delay(Rng())), [generation]() { FinishFightReaction(generation); });
+            }
+        }
+    }
+
+    void ReactToHeal(RE::Actor* actor, RE::Actor* healer, const std::string& how, const std::vector<std::string>& closed,
+        const std::vector<std::string>& treated)
+    {
+        std::vector<std::string> speakers;
+        if (CanSpeak(actor)) {
+            speakers.push_back(ActorName(actor));  // the healed follower
+        } else if (actor->IsPlayerRef() && healer && healer != actor && CanSpeak(healer)) {
+            speakers.push_back(ActorName(healer));  // a follower healed the player
+        } else {
+            return;
+        }
+        std::string details;
+        if (!healer || healer == actor) {
+            details = std::format("{} used {} on their own wounds.", WhoText(actor), how);
+        } else {
+            details = std::format("{} healed {} with {}.", WhoText(healer), WhoText(actor), how);
+        }
+        auto join = [](const std::vector<std::string>& items) {
+            std::string out;
+            for (size_t i = 0; i < items.size(); ++i) {
+                out += (i == 0 ? "" : (i + 1 == items.size() ? " and " : ", ")) + items[i];
+            }
+            return out;
+        };
+        if (!closed.empty()) {
+            details += std::format(" Closed: {}.", join(closed));
+        }
+        if (!treated.empty()) {
+            details += std::format(" Treated but still painful, needs a night's rest in a bed: {}.", join(treated));
+        }
+        auto player = RE::PlayerCharacter::GetSingleton();
+        RequestReaction("heal", speakers, details, player && player->IsInCombat());
+    }
+}
+
+// ========================================================================================
 // Wounds: creation, healing, sleeping
 // ========================================================================================
 namespace
@@ -1413,6 +1669,7 @@ namespace
             LogToChim(name, worse ? "worse" : "new",
                 std::format("{} {} {} on the {}{}.", name, worse ? "now has a worse wound:" : "was wounded:", label, RegionLabel(w.region), SourceText(w)));
         }
+        NoteFightWound(actor, w, SourceText(w));
     }
 
     // Adds a wound (or makes an existing one worse). Max `maxWounds` per actor.
@@ -1711,7 +1968,7 @@ namespace
     std::unordered_map<RE::FormID, Clock::time_point> g_lastHealAt;
 
     // Healing magic or a potion: light and medium wounds close, severe ones get treated.
-    void HealByMagic(RE::Actor* actor, const std::string& how)
+    void HealByMagic(RE::Actor* actor, const std::string& how, RE::Actor* healer = nullptr, bool fromPage = false)
     {
         auto it = g_wounds.find(actor->GetFormID());
         if (it == g_wounds.end() || it->second.wounds.empty()) {
@@ -1721,10 +1978,12 @@ namespace
         int closed = 0;
         int closedMedium = 0;
         std::vector<std::string> treated;
+        std::vector<std::string> closedText;
         for (auto w = wounds.begin(); w != wounds.end();) {
             if (w->severity < 3) {
                 closedMedium += w->severity == 2 ? 1 : 0;
                 ++closed;
+                closedText.push_back(std::format("{} on the {}", WoundLabel(*w), RegionLabel(w->region)));
                 w = wounds.erase(w);
                 continue;
             }
@@ -1757,6 +2016,9 @@ namespace
             LogToChim(name, "treated", sentence);
         }
         OverlaysChanged(actor->GetFormID());
+        if (!fromPage && (closedMedium > 0 || !treated.empty())) {
+            ReactToHeal(actor, healer, how, closedText, treated);
+        }
     }
 
     bool IsRestoreHealth(const RE::EffectSetting* mgef)
@@ -1829,7 +2091,8 @@ namespace
             return;
         }
         g_lastHealAt[targetId] = now;
-        HealByMagic(actor, "healing magic");
+        auto healerPtr = casterHandle.get();
+        HealByMagic(actor, "healing magic", healerPtr.get());
     }
 
     void OnPotion(RE::FormID actorId, RE::FormID itemId)
@@ -1840,7 +2103,7 @@ namespace
             return;
         }
         if (RestoreAmount(potion) >= g_settings.healMinAmount) {
-            HealByMagic(actor, "a healing potion");
+            HealByMagic(actor, "a healing potion", actor);
         }
     }
 
@@ -1947,7 +2210,7 @@ namespace
             FullHeal(id);
         } else if (action == "treat") {
             if (auto actor = LookupActor(id)) {
-                HealByMagic(actor, "healing magic");
+                HealByMagic(actor, "healing magic", nullptr, true);
             }
         } else if (action == "remove") {
             if (auto it = g_wounds.find(id); it != g_wounds.end()) {
@@ -2024,6 +2287,7 @@ namespace
             return;
         }
         RefreshTracked();
+        WatchFight();
         HealByTime();
         RefreshAllOverlays(false);  // cheap unless an actor's 3D was reloaded or its wounds changed
     }
@@ -2239,6 +2503,7 @@ namespace
         b("notifications", s.notifications);
         i("notify_min_severity", s.notifyMinSeverity);
         b("log_to_chim", s.logToChim);
+        b("reactions", s.reactions);
         i("log_min_severity", s.logMinSeverity);
         f("min_damage_pct", s.minDamagePct);
         f("medium_damage_pct", s.mediumDamagePct);
@@ -2371,12 +2636,12 @@ namespace
         g_stateDirty = false;
         return std::format(
             "{{\"plugin\":\"{}\",\"version\":\"{}\",\"game_version\":\"{}\",\"server_from\":\"{}\",\"game_loaded\":{},"
-            "\"racemenu_loaded\":{},\"racemenu_version\":\"{}\",\"overlay_slots\":{},\"overlay_player_only\":{},\"overlay_slots_short\":{},\"anim_plugin\":{},\"anim_actors\":{},"
+            "\"racemenu_loaded\":{},\"racemenu_version\":\"{}\",\"overlay_slots\":{},\"overlay_player_only\":{},\"overlay_slots_short\":{},\"anim_plugin\":{},\"anim_actors\":{},\"reactions_queued\":{},"
             "\"enabled\":{},\"debug\":{},\"tracked\":{},\"wounds\":{},\"hits_seen\":{},\"wounds_made\":{},\"healed_magic\":{},"
             "\"healed_rest\":{},\"healed_time\":{},\"logged_to_chim\":{},\"overlays_applied\":{},\"failures\":{},\"cmd_done\":{},"
             "\"last_error\":\"{}\",\"state\":{},\"log_lines\":[{}]}}",
             kPluginId, kPluginVersion, JsonEscape(runtime), g_server.fromIni ? "CHIMInjury.ini" : "auto", g_gameReady,
-            g_overlay.skeeLoaded, JsonEscape(g_overlay.skeeVersion), g_overlay.numOverlays, g_overlay.playerOnly, g_overlaySlotsShort.load(), g_animReady, g_animApplied.size(),
+            g_overlay.skeeLoaded, JsonEscape(g_overlay.skeeVersion), g_overlay.numOverlays, g_overlay.playerOnly, g_overlaySlotsShort.load(), g_animReady, g_animApplied.size(), g_statReactions.load(),
             g_settings.enabled, g_settings.debug, g_tracked.size(), woundCount, g_statHits.load(), g_statWounds.load(),
             g_statHealedMagic.load(), g_statHealedRest.load(), g_statHealedTime.load(), g_statLogged.load(), g_statOverlayApplied.load(),
             g_statFailures.load(), g_lastCommand, JsonEscape(lastError), state, lines);
@@ -2556,6 +2821,9 @@ namespace
     {
         ClearAnimKeywords();  // base forms keep runtime keywords until the game closes
         g_animPhase.clear();
+        g_fightNotes.clear();
+        g_playerInCombat = false;
+        ++g_fightGeneration;
         g_wounds.clear();
         g_pending.clear();
         g_healthSample.clear();

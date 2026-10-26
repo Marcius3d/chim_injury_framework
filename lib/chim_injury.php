@@ -10,7 +10,7 @@ if (defined('CHIM_INJURY_VERSION')) {
     return;
 }
 
-define('CHIM_INJURY_VERSION', '0.3.0');
+define('CHIM_INJURY_VERSION', '0.3.1');
 define('CHIM_INJURY_PLUGIN', 'chim_injury_framework');
 define('CHIM_INJURY_TABLE', 'plugins.chim_injury_settings');
 define('CHIM_INJURY_LOG_TABLE', 'plugins.chim_injury_log');
@@ -50,6 +50,7 @@ function chimInjuryGameKeys(): array
         'anim_on_max_seconds' => 'float',
         'anim_off_min_seconds' => 'float',
         'anim_off_max_seconds' => 'float',
+        'reactions' => 'bool',
     ];
 }
 
@@ -84,6 +85,24 @@ function chimInjuryDefaults(): array
         'anim_off_min_seconds' => '20',
         'anim_off_max_seconds' => '25',
         // Prompt (server only)
+        'reactions' => '1',
+        // Spoken reactions (server policy)
+        'react_combat' => '1',            // a follower cries out right away when someone is badly hurt in a fight
+        'react_combat_chance' => '60',
+        'react_combat_cooldown' => '60',  // real seconds
+        'react_after_fight' => '1',       // the most hurt follower talks about the injuries after the fight
+        'react_after_fight_chance' => '70',
+        'react_after_fight_cooldown' => '120',
+        'react_heal' => '1',              // the healed follower (or the follower who healed the player) reacts
+        'react_heal_chance' => '70',
+        'react_heal_cooldown' => '60',
+        'react_min_gap' => '20',          // real seconds between any two reactions
+        'react_combat_words' => '15',     // word limit per reaction (0 = no limit)
+        'react_after_fight_words' => '30',
+        'react_heal_words' => '25',
+        'tpl_combat' => 'Someone was badly hurt in the middle of the fight: {DETAILS} {NPC} reacts out loud right now, in character (pain, anger or fear).',
+        'tpl_after_fight' => 'The fight is over. {NPC} reacts to the injuries from it, in character: their own wounds first if they are hurt, otherwise the others\' wounds. Injuries: {DETAILS}',
+        'tpl_heal' => '{NPC} reacts to this healing, in character (relief, thanks, or that it still hurts). What happened: {DETAILS}',
         'inject_self' => '1',
         'inject_nearby' => '1',
         'self_template' => 'Your current injuries: {INJURIES}. They hurt; let them show in how you speak and act when it fits, without listing them.',
@@ -97,6 +116,13 @@ function chimInjuryDefaults(): array
         'command_seq' => '0',
         'stat_injected' => '0',
         'stat_events' => '0',
+        'stat_react_requests' => '0',
+        'stat_react_allowed' => '0',
+        'last_react_ts' => '0',
+        'last_react_combat_ts' => '0',
+        'last_react_after_fight_ts' => '0',
+        'last_react_heal_ts' => '0',
+        'react_token_ts' => '0',
     ];
 }
 
@@ -144,7 +170,7 @@ function chimInjuryGetSettings(): array
     } catch (Throwable $e) {
         // Defaults keep the plugin usable while the table is unavailable.
     }
-    foreach (['self_template', 'nearby_template'] as $key) {
+    foreach (['self_template', 'nearby_template', 'tpl_combat', 'tpl_after_fight', 'tpl_heal'] as $key) {
         if (trim($settings[$key]) === '') {
             $settings[$key] = chimInjuryDefaults()[$key];
         }
@@ -556,6 +582,162 @@ function chimInjuryInjectPrompt(): void
     if ($parts['self'] !== '' || $parts['nearby'] !== '') {
         chimInjuryIncrement('stat_injected');
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Spoken reactions (requested by the DLL as "instruction" with a [chim_injury ...] marker)
+// ---------------------------------------------------------------------------------------
+
+/** Marker CHIMInjury.dll puts in front of a reaction request. */
+define('CHIM_INJURY_REACT_MARKER_REGEX', '/\[chim_injury\s+([^\]]*)\]\s*/i');
+
+function chimInjuryReactKinds(): array
+{
+    return ['combat', 'after_fight', 'heal'];
+}
+
+function chimInjuryReasonText(string $reason): string
+{
+    return [
+        'ok' => 'allowed',
+        'disabled' => 'reactions are turned off',
+        'kind_disabled' => 'this kind of reaction is turned off',
+        'unknown_kind' => 'unknown reaction',
+        'min_gap' => 'another reaction was just spoken',
+        'cooldown' => 'cooldown',
+        'chance' => 'chance roll',
+    ][$reason] ?? $reason;
+}
+
+/** Chance and cooldown policy. Returns [allowed, reason]. */
+function chimInjuryDecideReaction(array $settings, string $kind, ?int $now = null): array
+{
+    $now = $now ?? time();
+    if ($settings['enabled'] !== '1' || $settings['reactions'] !== '1') {
+        return [false, 'disabled'];
+    }
+    if (!in_array($kind, chimInjuryReactKinds(), true)) {
+        return [false, 'unknown_kind'];
+    }
+    if (($settings["react_{$kind}"] ?? '0') !== '1') {
+        return [false, 'kind_disabled'];
+    }
+    $gap = max(0, (int)$settings['react_min_gap']);
+    if ($gap > 0 && $now - (int)$settings['last_react_ts'] < $gap) {
+        return [false, 'min_gap'];
+    }
+    $cooldown = max(0, (int)($settings["react_{$kind}_cooldown"] ?? 0));
+    if ($cooldown > 0 && $now - (int)($settings["last_react_{$kind}_ts"] ?? 0) < $cooldown) {
+        return [false, 'cooldown'];
+    }
+    $chance = max(0, min(100, (int)($settings["react_{$kind}_chance"] ?? 100)));
+    if ($chance < 100 && random_int(1, 100) > $chance) {
+        return [false, 'chance'];
+    }
+    return [true, 'ok'];
+}
+
+function chimInjuryNoteReaction(string $kind, int $now): void
+{
+    chimInjurySetValue('last_react_ts', (string)$now);
+    chimInjurySetValue("last_react_{$kind}_ts", (string)$now);
+    chimInjuryIncrement('stat_react_allowed');
+}
+
+/** api/decide.php: asked by the DLL before it requests a reaction. An allow leaves a 120 s token. */
+function chimInjuryDecideForGame(string $kind, string $npc): array
+{
+    $settings = chimInjuryGetSettings();
+    chimInjuryIncrement('stat_react_requests');
+    [$allowed, $reason] = chimInjuryDecideReaction($settings, $kind);
+    if (!$allowed) {
+        chimInjuryLog('info', "Reaction ({$kind}) for {$npc} skipped: " . chimInjuryReasonText($reason));
+        return [false, $reason];
+    }
+    $now = time();
+    chimInjuryNoteReaction($kind, $now);
+    chimInjurySetValue('react_token_ts', (string)$now);
+    chimInjuryLog('info', "Reaction ({$kind}) for {$npc} allowed");
+    return [true, 'ok'];
+}
+
+function chimInjuryParseReaction(string $data): ?array
+{
+    if (!preg_match(CHIM_INJURY_REACT_MARKER_REGEX, $data, $m, PREG_OFFSET_CAPTURE)) {
+        return null;
+    }
+    $values = ['react' => '', 'combat' => 0];
+    if (preg_match('/react=([a-z_]+)/i', $m[1][0], $km)) {
+        $values['react'] = strtolower($km[1]);
+    }
+    if (preg_match('/combat=(\d)/i', $m[1][0], $cm)) {
+        $values['combat'] = (int)$cm[1];
+    }
+    return [
+        'values' => $values,
+        'prefix' => substr($data, 0, $m[0][1]),  // e.g. "(Context location: ...)" added by CHIM
+        'details' => trim(substr($data, $m[0][1] + strlen($m[0][0]))),
+    ];
+}
+
+/** Word limit of a reaction (0 = none). During combat the combat limit also applies to the other kinds. */
+function chimInjuryWordLimit(array $settings, string $kind, bool $combat): int
+{
+    $limits = [max(0, (int)($settings["react_{$kind}_words"] ?? 0))];
+    if ($combat && $kind !== 'combat') {
+        $limits[] = max(0, (int)$settings['react_combat_words']);
+    }
+    $limits = array_filter($limits);
+    return $limits ? max(3, min($limits)) : 0;
+}
+
+function chimInjuryBuildReaction(array $settings, string $kind, string $npc, string $details, bool $combat): string
+{
+    $template = trim((string)($settings["tpl_{$kind}"] ?? ''));
+    if ($template === '') {
+        $template = chimInjuryDefaults()["tpl_{$kind}"] ?? '{NPC} reacts: {DETAILS}';
+    }
+    if (strpos($template, '{DETAILS}') === false) {
+        $template .= ' {DETAILS}';
+    }
+    $text = strtr($template, ['{NPC}' => $npc !== '' ? $npc : 'The follower', '{DETAILS}' => $details]);
+    $words = chimInjuryWordLimit($settings, $kind, $combat);
+    if ($words > 0) {
+        $text .= $words <= 20 ? " Keep it to one short line of at most {$words} words." : " Keep it short: at most {$words} words.";
+    }
+    return $text;
+}
+
+/**
+ * prerequest.php for "instruction" requests. Returns null when the request is not ours,
+ * ['allow' => false] to drop it, or ['allow' => true, 'data' => string] with the rewritten text.
+ */
+function chimInjuryHandleReactionRequest(array $gameRequest): ?array
+{
+    if ((string)($gameRequest[0] ?? '') !== 'instruction' || !isset($gameRequest[3])) {
+        return null;
+    }
+    $parsed = chimInjuryParseReaction((string)$gameRequest[3]);
+    if ($parsed === null) {
+        return null;
+    }
+    $settings = chimInjuryGetSettings();
+    $kind = $parsed['values']['react'];
+    $npc = (string)($GLOBALS['HERIKA_NAME'] ?? '');
+    $token = (int)$settings['react_token_ts'];
+    if ($token > 0 && time() - $token < 120) {
+        chimInjurySetValue('react_token_ts', '0');  // decided through api/decide.php already
+    } else {
+        chimInjuryIncrement('stat_react_requests');
+        [$allowed, $reason] = chimInjuryDecideReaction($settings, $kind);
+        if (!$allowed) {
+            chimInjuryLog('info', "Reaction ({$kind}) for {$npc} skipped: " . chimInjuryReasonText($reason));
+            return ['allow' => false];
+        }
+        chimInjuryNoteReaction($kind, time());
+    }
+    chimInjuryLog('info', "Reaction ({$kind}) sent to CHIM for {$npc}: {$parsed['details']}");
+    return ['allow' => true, 'data' => $parsed['prefix'] . chimInjuryBuildReaction($settings, $kind, $npc, $parsed['details'], $parsed['values']['combat'] === 1)];
 }
 
 // ---------------------------------------------------------------------------------------

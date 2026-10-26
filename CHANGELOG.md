@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Spoken reactions (the wounded follower speaks, not just whoever stands nearest):
+  - severe wound in combat: the badly hurt follower cries out right away, at most 15 words (a follower near you when you are the one hurt);
+  - after the fight: the most hurt follower talks about the fight's injuries, 5–12 s after it ends;
+  - healing: the healed follower reacts, or the follower who healed you.
+- Each kind has its own chance, cooldown, word limit (combat 15, after the fight 30, healing 25; 0 = none) and instruction text on the plugin page, plus a minimum gap between any two reactions. During a fight the combat limit also applies to the other kinds.
+- New endpoint `api/decide.php`; `prerequest.php` rewrites the `[chim_injury ...]` request into the instruction.
+
 ## 0.3.0
 
 The framework now covers words, body textures and animations, so the version jumps to 0.3.

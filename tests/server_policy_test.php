@@ -131,6 +131,46 @@ check('event marker parsed', $parsed['values'] === ['actor' => 'Lydia', 'event' 
 check('event sentence without marker', $parsed['sentence'] === 'Lydia was wounded: deep gash on the left arm, from Bandit Chief\'s Steel Sword.');
 check('other text is not an event', chimInjuryParseEvent('Lydia: hello') === null);
 
+// --- spoken reactions ------------------------------------------------------------------------
+$rs = chimInjuryGetSettings();
+$rs['react_combat_chance'] = '100';
+$now = 1000000;
+check('reaction allowed', chimInjuryDecideReaction($rs, 'combat', $now) === [true, 'ok']);
+check('unknown kind refused', chimInjuryDecideReaction($rs, 'dance', $now)[1] === 'unknown_kind');
+$off = $rs; $off['reactions'] = '0';
+check('reactions off', chimInjuryDecideReaction($off, 'combat', $now)[1] === 'disabled');
+$off = $rs; $off['react_heal'] = '0';
+check('one kind off', chimInjuryDecideReaction($off, 'heal', $now)[1] === 'kind_disabled');
+$gap = $rs; $gap['last_react_ts'] = (string)($now - 5);
+check('min gap between reactions', chimInjuryDecideReaction($gap, 'combat', $now)[1] === 'min_gap');
+$cd = $rs; $cd['last_react_combat_ts'] = (string)($now - 30); $cd['last_react_ts'] = '0';
+check('per kind cooldown', chimInjuryDecideReaction($cd, 'combat', $now)[1] === 'cooldown');
+$zero = $rs; $zero['react_heal_chance'] = '0';
+check('chance 0 never speaks', chimInjuryDecideReaction($zero, 'heal', $now)[1] === 'chance');
+
+$GLOBALS['db']->rows['react_combat_chance'] = '100';
+$GLOBALS['db']->rows['react_min_gap'] = '0';
+$GLOBALS['db']->rows['last_react_ts'] = '0';
+[$ok] = chimInjuryDecideForGame('combat', 'Lydia');
+check('decide endpoint allows and leaves a token', $ok && (int)chimInjuryGetSettings()['react_token_ts'] > 0);
+$GLOBALS['HERIKA_NAME'] = 'Lydia';
+$req = ['instruction', '1', '2', '(Context location: Riften)[chim_injury react=combat npc="Lydia" combat=1] Lydia was badly hurt: deep gash on the left arm, from Bandit\'s Steel Sword.'];
+$res = chimInjuryHandleReactionRequest($req);
+check('reaction rewritten with context prefix', $res['allow'] && str_starts_with($res['data'], '(Context location: Riften)Someone was badly hurt in the middle of the fight: Lydia was badly hurt'));
+check('combat word limit added', str_contains($res['data'], 'at most 15 words'));
+check('token consumed', chimInjuryGetSettings()['react_token_ts'] === '0');
+check('other instructions untouched', chimInjuryHandleReactionRequest(['instruction', '1', '2', 'Talk about the weather.']) === null);
+$GLOBALS['db']->rows['react_heal'] = '0';
+$res = chimInjuryHandleReactionRequest(['instruction', '1', '2', '[chim_injury react=heal npc="Lydia" combat=0] Martin healed Lydia.']);
+check('without token the policy decides (heal off)', $res === ['allow' => false]);
+$text = chimInjuryBuildReaction(chimInjuryGetSettings(), 'after_fight', 'Sofia', 'Sofia: stab wound on the left arm.', false);
+check('after-fight text has its own limit', str_contains($text, 'Injuries: Sofia: stab wound') && str_contains($text, 'at most 30 words'));
+$ws = chimInjuryGetSettings();
+check('heal limit 25 out of combat', chimInjuryWordLimit($ws, 'heal', false) === 25);
+check('heal in combat uses the smaller combat limit', chimInjuryWordLimit($ws, 'heal', true) === 15);
+$ws['react_heal_words'] = '0'; $ws['react_combat_words'] = '0';
+check('0 = no limit', chimInjuryWordLimit($ws, 'heal', true) === 0 && !str_contains(chimInjuryBuildReaction($ws, 'heal', 'Lydia', 'x', true), 'words'));
+
 // --- packaging rule -------------------------------------------------------------------------
 $hookNames = ['globals.php', 'preprocessing.php', 'prerequest.php', 'context_pre.php', 'context.php', 'prompts.php', 'postrequest.php', 'functions.php'];
 $bad = [];

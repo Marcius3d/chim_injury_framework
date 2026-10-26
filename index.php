@@ -46,7 +46,7 @@ function ciHealsIn(array $w): string
     return 'in about ' . number_format($days, 1) . ' days';
 }
 
-const CI_BOOLS = ['enabled', 'debug', 'track_player', 'track_followers', 'show_overlays', 'show_on_player', 'animations', 'anim_episodes', 'notifications', 'log_to_chim',
+const CI_BOOLS = ['enabled', 'debug', 'track_player', 'track_followers', 'show_overlays', 'show_on_player', 'animations', 'anim_episodes', 'notifications', 'log_to_chim', 'reactions', 'react_combat', 'react_after_fight', 'react_heal',
     'inject_self', 'inject_nearby'];
 // key => [min, max, integer]
 const CI_NUMBERS = [
@@ -66,8 +66,18 @@ const CI_NUMBERS = [
     'anim_on_max_seconds' => [1, 600, false],
     'anim_off_min_seconds' => [0, 3600, false],
     'anim_off_max_seconds' => [0, 3600, false],
+    'react_combat_chance' => [0, 100, true],
+    'react_combat_cooldown' => [0, 86400, true],
+    'react_after_fight_chance' => [0, 100, true],
+    'react_after_fight_cooldown' => [0, 86400, true],
+    'react_heal_chance' => [0, 100, true],
+    'react_heal_cooldown' => [0, 86400, true],
+    'react_min_gap' => [0, 3600, true],
+    'react_combat_words' => [0, 200, true],
+    'react_after_fight_words' => [0, 200, true],
+    'react_heal_words' => [0, 200, true],
 ];
-const CI_TEXTS = ['self_template', 'nearby_template'];
+const CI_TEXTS = ['self_template', 'nearby_template', 'tpl_combat', 'tpl_after_fight', 'tpl_heal'];
 
 if (isset($_GET['download'])) {
     header('Content-Type: text/plain; charset=utf-8');
@@ -227,6 +237,7 @@ usort($actors, static fn($a, $b) => [empty($a['player']), -count($a['wounds'] ??
       </td></tr>
       <tr><td>This session: hits checked / wounds / healed (magic, rest, time)</td><td><?= (int)($status['hits_seen'] ?? 0) ?> / <?= (int)($status['wounds_made'] ?? 0) ?> / <?= (int)($status['healed_magic'] ?? 0) ?>, <?= (int)($status['healed_rest'] ?? 0) ?>, <?= (int)($status['healed_time'] ?? 0) ?></td></tr>
       <tr><td>Events saved to CHIM memory / prompts with injuries</td><td><?= ciH($settings['stat_events']) ?> / <?= ciH($settings['stat_injected']) ?></td></tr>
+      <tr><td>Spoken reactions: asked / allowed by the server / queued by CHIM (this session)</td><td><?= ciH($settings['stat_react_requests']) ?> / <?= ciH($settings['stat_react_allowed']) ?> / <?= (int)($status['reactions_queued'] ?? 0) ?></td></tr>
       <?php if ($pending > 0): ?><tr><td>Commands waiting for the game</td><td><?= $pending ?></td></tr><?php endif; ?>
       <?php if (!empty($status['last_error'])): ?><tr><td>Last error in game</td><td class="bad"><?= ciH($status['last_error']) ?></td></tr><?php endif; ?>
     </table>
@@ -324,6 +335,31 @@ usort($actors, static fn($a, $b) => [empty($a['player']), -count($a['wounds'] ??
         <div><label>Sleep needed (hours in a bed)<?= ciDef('min_sleep_hours', ' h') ?></label><input type="number" step="0.5" name="min_sleep_hours" min="0" max="24" value="<?= ciH($settings['min_sleep_hours']) ?>"></div>
       </div>
       <p class="hint">Healing magic and potions close light and medium wounds. Severe wounds only get treated; a treated severe wound heals fully after sleeping in a bed. Followers rest when you sleep.</p>
+    </section>
+
+    <section>
+      <h2>Spoken reactions</h2>
+      <label class="check"><input type="checkbox" name="reactions" value="1" <?= ciChecked($settings, 'reactions') ?>> Followers react out loud to wounds and healing<?= ciDefOnOff('reactions') ?></label>
+      <p class="hint">The wounded follower speaks, not just whoever stands nearest. Chance and cooldown keep it from happening after every hit or potion.</p>
+      <?php foreach ([
+          'combat' => ['Severe wound in combat', 'The badly hurt follower cries out right away (or a follower near you, when you are the one hurt).'],
+          'after_fight' => ['After the fight', 'The most hurt follower talks about the injuries of the fight, 5–12 s after it ends.'],
+          'heal' => ['Healing', 'The healed follower reacts (thanks, relief, still hurts), or the follower who healed you.'],
+      ] as $kind => [$title, $hint]): ?>
+        <h3><label class="check" style="margin:0"><input type="checkbox" name="react_<?= $kind ?>" value="1" <?= ciChecked($settings, "react_{$kind}") ?>> <?= ciH($title) ?><?= ciDefOnOff("react_{$kind}") ?></label></h3>
+        <p class="hint"><?= ciH($hint) ?></p>
+        <div class="row">
+          <div><label>Chance (%)<?= ciDef("react_{$kind}_chance", ' %') ?></label><input type="number" name="react_<?= $kind ?>_chance" min="0" max="100" value="<?= ciH($settings["react_{$kind}_chance"]) ?>"></div>
+          <div><label>Cooldown (real seconds)<?= ciDef("react_{$kind}_cooldown", ' s') ?></label><input type="number" name="react_<?= $kind ?>_cooldown" min="0" max="86400" value="<?= ciH($settings["react_{$kind}_cooldown"]) ?>"></div>
+          <div><label>Word limit (0 = none)<?= ciDef("react_{$kind}_words") ?></label><input type="number" name="react_<?= $kind ?>_words" min="0" max="200" value="<?= ciH($settings["react_{$kind}_words"]) ?>"></div>
+        </div>
+        <label for="tpl_<?= $kind ?>">Instruction</label>
+        <textarea id="tpl_<?= $kind ?>" name="tpl_<?= $kind ?>"><?= ciH($settings["tpl_{$kind}"]) ?></textarea>
+      <?php endforeach; ?>
+      <div class="row">
+        <div><label>At least this long between any two reactions (s)<?= ciDef('react_min_gap', ' s') ?></label><input type="number" name="react_min_gap" min="0" max="3600" value="<?= ciH($settings['react_min_gap']) ?>"></div>
+      </div>
+      <p class="hint"><code>{NPC}</code> = the follower who speaks, <code>{DETAILS}</code> = what happened (written by the game plugin, in English). The word limit is added to the instruction; the LLM usually keeps to it. During a fight the combat limit also applies to healing and other reactions.</p>
     </section>
 
     <section>
