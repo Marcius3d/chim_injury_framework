@@ -109,7 +109,7 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
 
 ### Logs
 
-- Game: `Documents\\My Games\\Skyrim Special Edition\\SKSE\\chim-injury.log`. Recent lines are also sent to the server and shown on the plugin page.
+- Game: `Documents\My Games\Skyrim Special Edition\SKSE\chim-injury.log`. Recent lines are also sent to the server and shown on the plugin page.
 - Server: the Diagnostics section of the plugin page (last 2000 entries).
 
 ## How it works
@@ -134,13 +134,8 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
 ```
 
 - **`CHIMInjury.dll`** is an SKSE plugin built with CommonLibSSE-NG. It talks to CHIM only through `AIAgentFunctions`, the API CHIM's own scripts use, and to RaceMenu only through the public `NiOverride` Papyrus functions. It works without the server (settings from the INI), and without RaceMenu (no visuals).
-<<<<<<< HEAD
-- **`ext/chim_injury_framework/`** is a HerikaServer plugin with two hooks (`prerequest.php` for `info_injury` events, `context_pre.php` for the prompt), a settings page, two API endpoints (`config`, `status`) and two tables, `plugins.chim_injury_settings` and `plugins.chim_injury_log`. Prompt text uses CHIM's `chimRegisterPromptInjection` (`character_bottom` and `prompt_bottom`).
-- Nothing changes in combat: no slowdown, no limping, no extra animations.
-=======
 - **`ext/chim_injury_framework/`** is a HerikaServer plugin with two hooks (`prerequest.php` for `info_injury` events, `context_pre.php` for the prompt), a settings page, three API endpoints (`config`, `status`, `decide` for spoken reactions) and two tables, `plugins.chim_injury_settings` and `plugins.chim_injury_log`. Prompt text uses CHIM's `chimRegisterPromptInjection` (`character_bottom` and `prompt_bottom`).
 - No gameplay penalties: wounds do not slow you down or lower your stats. Limping and holding a wound come only from the optional Wound Animation Pack, through state keywords (`CHIMInjury_Animations.esp`, see `tools/make_anim_plugin.py`).
->>>>>>> 7c9b471 (CHIM Injury Framework 0.3.3)
 
 ## Feedback
 
