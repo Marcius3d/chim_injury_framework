@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4
+
+- The game plugin is built with [CommonLibSSE-NG](https://github.com/alandtse/CommonLibSSE-NG) 15.4.0. That library reads Address Library format 5 (Skyrim 1.7.99 and 1.7.104 in Address Library All-in-One v13) and declares the Address Library v5 flag that SKSE 2.3.x requires. SE 1.5.97 and AE 1.6.x stay supported. Wounds, saves, overlays and CHIM messages are unchanged.
+- 1.7.104 needs SKSE 2.3.1 or newer. Details and the in-game checks still to do: `docs/ADDRESS_LIBRARY_V5_UPDATE.md`.
+
 ## 0.3.3
 
 - Release archives now carry the release time instead of a fixed date. CHIM installs the server package with the newest file time, so a newer release now always wins over an older one left in place.

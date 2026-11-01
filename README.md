@@ -8,7 +8,7 @@ CHIM Injury Framework is an add-on for [CHIM](https://www.nexusmods.com/skyrimsp
 
 > "Hold still. That cut on your arm is still bleeding, and I'm not carrying you back to Whiterun."
 
-> **Status: 0.3.3, test version.** Works in game on Nolvus (Skyrim SE 1.5.97) with RaceMenu; testing continues. Please report results (see [Feedback](#feedback)).
+> **Status: 0.3.4, test version.** Built for Skyrim SE 1.5.97, AE 1.6.x and 1.7.x with Address Library All-in-One v13. 0.3.3 was used in game on Nolvus (1.5.97); 0.3.4 still needs an in-game check on 1.5.97 and on 1.7.104. Please report results (see [Feedback](#feedback)).
 
 ## ⬇ Download
 
@@ -58,8 +58,8 @@ Severity: light below 12% of maximum health in one hit, medium below 25%, severe
 
 | Required | Notes |
 |---|---|
-| Skyrim SE/AE + [SKSE64](https://skse.silverlock.org/) | any runtime supported by Address Library |
-| [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444) | |
+| Skyrim SE 1.5.97, AE 1.6.x, or 1.7.x + [SKSE64](https://skse.silverlock.org/) | 1.7.104 needs SKSE 2.3.1 or newer |
+| [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444), All-in-One v13 | SE 1.5.97, AE 1.6.x and 1.7.x. The 1.7.99 and 1.7.104 files (`versionlib-1-7-99-0.bin`, `versionlib-1-7-104-0.bin`) are address library format 5 |
 | [CHIM](https://www.nexusmods.com/skyrimspecialedition/mods/126330) + DwemerDistro server | CHIM / HerikaServer 3.4.2 or newer (prompt injection) |
 
 | Optional | What for |
@@ -133,7 +133,7 @@ RaceMenu has 6 body overlay slots by default (`iNumOverlays` under `[Overlays/Bo
                                                    of the NPC who speaks
 ```
 
-- **`CHIMInjury.dll`** is an SKSE plugin built with CommonLibSSE-NG. It talks to CHIM only through `AIAgentFunctions`, the API CHIM's own scripts use, and to RaceMenu only through the public `NiOverride` Papyrus functions. It works without the server (settings from the INI), and without RaceMenu (no visuals).
+- **`CHIMInjury.dll`** is an SKSE plugin built with CommonLibSSE-NG 15.4.0 (Address Library formats 1, 2 and 5). It talks to CHIM only through `AIAgentFunctions`, the API CHIM's own scripts use, and to RaceMenu only through the public `NiOverride` Papyrus functions. It works without the server (settings from the INI), and without RaceMenu (no visuals).
 - **`ext/chim_injury_framework/`** is a HerikaServer plugin with two hooks (`prerequest.php` for `info_injury` events, `context_pre.php` for the prompt), a settings page, three API endpoints (`config`, `status`, `decide` for spoken reactions) and two tables, `plugins.chim_injury_settings` and `plugins.chim_injury_log`. Prompt text uses CHIM's `chimRegisterPromptInjection` (`character_bottom` and `prompt_bottom`).
 - No gameplay penalties: wounds do not slow you down or lower your stats. Limping and holding a wound come only from the optional Wound Animation Pack, through state keywords (`CHIMInjury_Animations.esp`, see `tools/make_anim_plugin.py`).
 
