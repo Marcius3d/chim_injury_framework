@@ -42,6 +42,8 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Use the runner's vcpkg
         shell: pwsh

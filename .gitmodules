@@ -1,0 +1,3 @@
+[submodule "SkyrimPlugin/extern/CommonLibSSE-NG"]
+	path = SkyrimPlugin/extern/CommonLibSSE-NG
+	url = https://github.com/alandtse/CommonLibSSE-NG.git
