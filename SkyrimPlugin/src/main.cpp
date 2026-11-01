@@ -261,7 +261,8 @@ namespace
     {
         auto show = [text, always]() {
             if (always || g_settings.debug) {
-                RE::DebugNotification((std::string(kNotifyPrefix) + text).c_str());
+                // Same game function the older CommonLib called DebugNotification (id 52050 / 52933).
+                RE::SendHUDMessage::ShowHUDMessage((std::string(kNotifyPrefix) + text).c_str());
             }
         };
         if (auto tasks = SKSE::GetTaskInterface()) {

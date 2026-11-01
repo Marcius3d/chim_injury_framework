@@ -24,6 +24,8 @@ The plugin now compiles against [CommonLibSSE-NG](https://github.com/alandtse/Co
 
 Wounds, the SKSE co-save, RaceMenu overlays, CHIM messages and the server plugin behave as before. The only intended difference is which game versions the DLL can load on.
 
+One call had to be renamed so the plugin compiles. On-screen text uses `RE::SendHUDMessage::ShowHUDMessage` instead of `RE::DebugNotification`. In CommonLibSSE-NG 15.4.0 that function is the old notification, at address library id 52050 / 52933, with the same arguments. The `CHIM-injury: ` prefix is unchanged.
+
 CommonLibSSE-NG 15.4.0 is GPL-3.0-or-later with a modding exception. The plugin's own code stays under the MIT licence in `LICENSE`.
 
 ## How this was tested

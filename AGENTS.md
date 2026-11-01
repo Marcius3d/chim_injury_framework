@@ -24,7 +24,7 @@ This repository is the source of a CHIM add-on. It has two parts.
 - **Page protection.** `index.php` POSTs must pass `chimInjuryIsSameOriginPost()` (Sec-Fetch-Site / Origin).
 - **Server hooks.** Never give files in `lib/`, `api/` or `images/` a hook name (HerikaServer loads hook names recursively); `scripts/build_packages.py` enforces this.
 - **Database.** `plugins.chim_injury_settings` (key/value, also holds the last report and the command queue) and `plugins.chim_injury_log` (diagnostics, trimmed to 2000 rows). Migrations are append-only once released.
-- **Notifications.** `RE::DebugNotification` with the `CHIM-injury: ` prefix. `activated` is always shown; wound messages follow the page settings.
+- **Notifications.** `RE::SendHUDMessage::ShowHUDMessage` (the game function older CommonLib called `DebugNotification`) with the `CHIM-injury: ` prefix. `activated` is always shown; wound messages follow the page settings.
 
 ## Versioning
 
